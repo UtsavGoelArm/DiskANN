@@ -878,17 +878,10 @@ impl SIMDSchema<f32, f32, Neon> for L2 {
         len: usize,
         acc: Self::Accumulator,
     ) -> Self::Accumulator {
-        let scalar = scalar_epilogue(
-            x,
-            y,
-            len.min(Self::SIMDWidth::value() - 1),
-            0.0f32,
-            |acc, x, y| -> f32 {
-                let c = x - y;
-                c.mul_add(c, acc)
-            },
-        );
-        acc + Self::Accumulator::from_array(arch, [scalar, 0.0, 0.0, 0.0])
+        let x = diskann_wide::arch::aarch64::f32x4::load_simd_first(arch, x, len);
+        let y = diskann_wide::arch::aarch64::f32x4::load_simd_first(arch, y, len);
+        let c = x - y;
+        c.mul_add_simd(c, acc)
     }
 
     #[inline(always)]
@@ -1063,20 +1056,12 @@ impl SIMDSchema<Half, Half, Neon> for L2 {
     ) -> Self::Accumulator {
         diskann_wide::alias!(f32s = <Neon>::f32x4);
 
-        let rest = scalar_epilogue(
-            x,
-            y,
-            len.min(Self::SIMDWidth::value() - 1),
-            f32s::default(arch),
-            |acc, x: Half, y: Half| -> f32s {
-                let zero = Half::default();
-                let x: f32s = Self::Left::from_array(arch, [x, zero, zero, zero]).into();
-                let y: f32s = Self::Right::from_array(arch, [y, zero, zero, zero]).into();
-                let c: f32s = x - y;
-                c.mul_add_simd(c, acc)
-            },
-        );
-        acc + rest
+        let x = diskann_wide::arch::aarch64::f16x4::load_simd_first(arch, x, len);
+        let y = diskann_wide::arch::aarch64::f16x4::load_simd_first(arch, y, len);
+        let x: f32s = x.into();
+        let y: f32s = y.into();
+        let c = x - y;
+        c.mul_add_simd(c, acc)
     }
 
     #[inline(always)]
@@ -1257,17 +1242,9 @@ impl SIMDSchema<i8, i8, Neon> for L2 {
         len: usize,
         acc: Self::Accumulator,
     ) -> Self::Accumulator {
-        let scalar = scalar_epilogue(
-            x,
-            y,
-            len.min(Self::SIMDWidth::value() - 1),
-            0i32,
-            |acc, x: i8, y: i8| -> i32 {
-                let c = (x as i32) - (y as i32);
-                acc + c * c
-            },
-        );
-        acc + Self::Accumulator::from_array(arch, [scalar, 0, 0, 0, 0, 0, 0, 0])
+        let x_vec = diskann_wide::arch::aarch64::i8x16::load_simd_first(arch, x, len);
+        let y_vec = diskann_wide::arch::aarch64::i8x16::load_simd_first(arch, y, len);
+        algorithms::squared_euclidean_accum_i8x16(x_vec, y_vec, acc)
     }
 
     // Perform a final reduction.
@@ -1435,17 +1412,9 @@ impl SIMDSchema<u8, u8, Neon> for L2 {
         len: usize,
         acc: Self::Accumulator,
     ) -> Self::Accumulator {
-        let scalar = scalar_epilogue(
-            x,
-            y,
-            len.min(Self::SIMDWidth::value() - 1),
-            0u32,
-            |acc, x: u8, y: u8| -> u32 {
-                let c = (x as i32) - (y as i32);
-                acc + ((c * c) as u32)
-            },
-        );
-        acc + Self::Accumulator::from_array(arch, [scalar, 0, 0, 0, 0, 0, 0, 0])
+        let x_vec = diskann_wide::arch::aarch64::u8x16::load_simd_first(arch, x, len);
+        let y_vec = diskann_wide::arch::aarch64::u8x16::load_simd_first(arch, y, len);
+        algorithms::squared_euclidean_accum_u8x16(x_vec, y_vec, acc)
     }
 
     // Perform a final reduction.
