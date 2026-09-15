@@ -1426,6 +1426,28 @@ impl SIMDSchema<u8, u8, Neon> for L2 {
         algorithms::squared_euclidean_accum_u8x16(x, y, acc)
     }
 
+    // #[inline(always)]
+    // unsafe fn epilogue(
+    //     &self,
+    //     arch: Neon,
+    //     x: *const u8,
+    //     y: *const u8,
+    //     len: usize,
+    //     acc: Self::Accumulator,
+    // ) -> Self::Accumulator {
+    //     let scalar = scalar_epilogue(
+    //         x,
+    //         y,
+    //         len.min(Self::SIMDWidth::value() - 1),
+    //         0u32,
+    //         |acc, x: u8, y: u8| -> u32 {
+    //             let c = (x as i32) - (y as i32);
+    //             acc + ((c * c) as u32)
+    //         },
+    //     );
+    //     acc + Self::Accumulator::from_array(arch, [scalar, 0, 0, 0, 0, 0, 0, 0])
+    // }
+
     #[inline(always)]
     unsafe fn epilogue(
         &self,
@@ -1435,17 +1457,50 @@ impl SIMDSchema<u8, u8, Neon> for L2 {
         len: usize,
         acc: Self::Accumulator,
     ) -> Self::Accumulator {
-        let scalar = scalar_epilogue(
-            x,
-            y,
-            len.min(Self::SIMDWidth::value() - 1),
-            0u32,
-            |acc, x: u8, y: u8| -> u32 {
-                let c = (x as i32) - (y as i32);
-                acc + ((c * c) as u32)
-            },
-        );
-        acc + Self::Accumulator::from_array(arch, [scalar, 0, 0, 0, 0, 0, 0, 0])
+        use core::arch::aarch64::{
+            vbslq_u8,
+            vcgeq_u8,
+            vdupq_n_u8,
+            vld1q_u8,
+        };
+
+        debug_assert!(len > 0);
+        debug_assert!(len < Self::SIMDWidth::value());
+
+        let overlap = Self::SIMDWidth::value() - len;
+
+        // Load one full SIMD vector ending exactly at the logical end.
+        let x_vec = vld1q_u8(x.sub(overlap));
+        let y_vec = vld1q_u8(y.sub(overlap));
+
+        // Lane indices [0, 1, ..., 15].
+        let lanes =
+            diskann_wide::arch::aarch64::u8x16::from_array(
+                arch,
+                [
+                    0, 1, 2, 3,
+                    4, 5, 6, 7,
+                    8, 9, 10, 11,
+                    12, 13, 14, 15,
+                ],
+            )
+            .to_underlying();
+
+        let threshold = vdupq_n_u8(overlap as u8);
+
+        // Keep only lanes belonging to the real tail.
+        let mask = vcgeq_u8(lanes, threshold);
+
+        // In overlapped lanes, replace x with y:
+        //
+        //     (y - y)^2 = 0
+        //
+        // In genuine tail lanes, keep the original x.
+        let x_vec = vbslq_u8(mask, x_vec, y_vec);
+        
+        let x_vec = diskann_wide::arch::aarch64::u8x16::from_underlying(arch, x_vec);
+        let y_vec = diskann_wide::arch::aarch64::u8x16::from_underlying(arch, y_vec);
+        algorithms::squared_euclidean_accum_u8x16(x_vec, y_vec, acc)
     }
 
     // Perform a final reduction.
