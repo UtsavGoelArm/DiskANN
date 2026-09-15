@@ -260,6 +260,15 @@ pub struct Strategy4x2;
 /// accumulator with a manual inner loop unroll of 4.
 pub struct Strategy2x4;
 
+/// An inner loop implementation strategy using 8 parallel instances of the schema
+/// accumulator with a manual inner loop unroll of 1.
+pub struct Strategy8x1;
+
+/// An inner loop implementation strategy using 8 parallel instances of the schema
+/// accumulator with a manual inner loop unroll of 2.
+pub struct Strategy8x2;
+
+
 impl MainLoop for Strategy1x1 {
     const BLOCK_SIZE: usize = 1;
 
@@ -479,6 +488,170 @@ impl MainLoop for Strategy2x4 {
         }
 
         schema.combine(s0, s1)
+    }
+}
+
+impl MainLoop for Strategy8x1 {
+    const BLOCK_SIZE: usize = 8;
+
+    #[inline(always)]
+    unsafe fn main<S, L, R, A>(
+        loader: &Loader<S, L, R, A>,
+        trip_count: usize,
+        epilogues: usize,
+    ) -> S::Accumulator
+    where
+        A: Architecture,
+        S: SIMDSchema<L, R, A>,
+    {
+        let arch = loader.arch();
+        let schema = loader.schema();
+
+        let mut s0 = schema.init(arch);
+        let mut s1 = schema.init(arch);
+        let mut s2 = schema.init(arch);
+        let mut s3 = schema.init(arch);
+        let mut s4 = schema.init(arch);
+        let mut s5 = schema.init(arch);
+        let mut s6 = schema.init(arch);
+        let mut s7 = schema.init(arch);
+
+        for i in 0..trip_count {
+            s0 = schema.accumulate_tuple(s0, loader.load(i, 0));
+            s1 = schema.accumulate_tuple(s1, loader.load(i, 1));
+            s2 = schema.accumulate_tuple(s2, loader.load(i, 2));
+            s3 = schema.accumulate_tuple(s3, loader.load(i, 3));
+            s4 = schema.accumulate_tuple(s4, loader.load(i, 4));
+            s5 = schema.accumulate_tuple(s5, loader.load(i, 5));
+            s6 = schema.accumulate_tuple(s6, loader.load(i, 6));
+            s7 = schema.accumulate_tuple(s7, loader.load(i, 7));
+        }
+
+        if epilogues >= 1 {
+            s0 = schema.accumulate_tuple(s0, loader.load(trip_count, 0));
+        }
+        if epilogues >= 2 {
+            s1 = schema.accumulate_tuple(s1, loader.load(trip_count, 1));
+        }
+        if epilogues >= 3 {
+            s2 = schema.accumulate_tuple(s2, loader.load(trip_count, 2));
+        }
+        if epilogues >= 4 {
+            s3 = schema.accumulate_tuple(s3, loader.load(trip_count, 3));
+        }
+        if epilogues >= 5 {
+            s4 = schema.accumulate_tuple(s4, loader.load(trip_count, 4));
+        }
+        if epilogues >= 6 {
+            s5 = schema.accumulate_tuple(s5, loader.load(trip_count, 5));
+        }
+        if epilogues >= 7 {
+            s6 = schema.accumulate_tuple(s6, loader.load(trip_count, 6));
+        }
+
+        let s01 = schema.combine(s0, s1);
+        let s23 = schema.combine(s2, s3);
+        let s45 = schema.combine(s4, s5);
+        let s67 = schema.combine(s6, s7);
+
+        schema.combine(
+            schema.combine(s01, s23),
+            schema.combine(s45, s67),
+        )
+    }
+}
+
+impl MainLoop for Strategy8x2 {
+    const BLOCK_SIZE: usize = 8;
+
+    #[inline(always)]
+    unsafe fn main<S, L, R, A>(
+        loader: &Loader<S, L, R, A>,
+        trip_count: usize,
+        epilogues: usize,
+    ) -> S::Accumulator
+    where
+        A: Architecture,
+        S: SIMDSchema<L, R, A>,
+    {
+        let arch = loader.arch();
+        let schema = loader.schema();
+
+        let mut s0 = schema.init(arch);
+        let mut s1 = schema.init(arch);
+        let mut s2 = schema.init(arch);
+        let mut s3 = schema.init(arch);
+        let mut s4 = schema.init(arch);
+        let mut s5 = schema.init(arch);
+        let mut s6 = schema.init(arch);
+        let mut s7 = schema.init(arch);
+
+        for i in 0..(trip_count / 2) {
+            let j = 2 * i;
+
+            s0 = schema.accumulate_tuple(s0, loader.load(j, 0));
+            s1 = schema.accumulate_tuple(s1, loader.load(j, 1));
+            s2 = schema.accumulate_tuple(s2, loader.load(j, 2));
+            s3 = schema.accumulate_tuple(s3, loader.load(j, 3));
+            s4 = schema.accumulate_tuple(s4, loader.load(j, 4));
+            s5 = schema.accumulate_tuple(s5, loader.load(j, 5));
+            s6 = schema.accumulate_tuple(s6, loader.load(j, 6));
+            s7 = schema.accumulate_tuple(s7, loader.load(j, 7));
+
+            s0 = schema.accumulate_tuple(s0, loader.load(j, 8));
+            s1 = schema.accumulate_tuple(s1, loader.load(j, 9));
+            s2 = schema.accumulate_tuple(s2, loader.load(j, 10));
+            s3 = schema.accumulate_tuple(s3, loader.load(j, 11));
+            s4 = schema.accumulate_tuple(s4, loader.load(j, 12));
+            s5 = schema.accumulate_tuple(s5, loader.load(j, 13));
+            s6 = schema.accumulate_tuple(s6, loader.load(j, 14));
+            s7 = schema.accumulate_tuple(s7, loader.load(j, 15));
+        }
+
+        if !trip_count.is_multiple_of(2) {
+            let j = trip_count - 1;
+
+            s0 = schema.accumulate_tuple(s0, loader.load(j, 0));
+            s1 = schema.accumulate_tuple(s1, loader.load(j, 1));
+            s2 = schema.accumulate_tuple(s2, loader.load(j, 2));
+            s3 = schema.accumulate_tuple(s3, loader.load(j, 3));
+            s4 = schema.accumulate_tuple(s4, loader.load(j, 4));
+            s5 = schema.accumulate_tuple(s5, loader.load(j, 5));
+            s6 = schema.accumulate_tuple(s6, loader.load(j, 6));
+            s7 = schema.accumulate_tuple(s7, loader.load(j, 7));
+        }
+
+        if epilogues >= 1 {
+            s0 = schema.accumulate_tuple(s0, loader.load(trip_count, 0));
+        }
+        if epilogues >= 2 {
+            s1 = schema.accumulate_tuple(s1, loader.load(trip_count, 1));
+        }
+        if epilogues >= 3 {
+            s2 = schema.accumulate_tuple(s2, loader.load(trip_count, 2));
+        }
+        if epilogues >= 4 {
+            s3 = schema.accumulate_tuple(s3, loader.load(trip_count, 3));
+        }
+        if epilogues >= 5 {
+            s4 = schema.accumulate_tuple(s4, loader.load(trip_count, 4));
+        }
+        if epilogues >= 6 {
+            s5 = schema.accumulate_tuple(s5, loader.load(trip_count, 5));
+        }
+        if epilogues >= 7 {
+            s6 = schema.accumulate_tuple(s6, loader.load(trip_count, 6));
+        }
+
+        let s01 = schema.combine(s0, s1);
+        let s23 = schema.combine(s2, s3);
+        let s45 = schema.combine(s4, s5);
+        let s67 = schema.combine(s6, s7);
+
+        schema.combine(
+            schema.combine(s01, s23),
+            schema.combine(s45, s67),
+        )
     }
 }
 
