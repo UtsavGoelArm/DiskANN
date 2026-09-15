@@ -1575,10 +1575,63 @@ impl SIMDSchema<u8, u8, V3> for L2 {
     }
 }
 
+// #[cfg(target_arch = "aarch64")]
+// impl SIMDSchema<u8, u8, Neon> for L2 {
+//     type SIMDWidth = Const<16>;
+//     type Accumulator = <Neon as Architecture>::u32x8;
+//     type Left = diskann_wide::arch::aarch64::u8x16;
+//     type Right = diskann_wide::arch::aarch64::u8x16;
+//     type Return = f32;
+//     type Main = Strategy2x1;
+// 
+//     #[inline(always)]
+//     fn init(&self, arch: Neon) -> Self::Accumulator {
+//         Self::Accumulator::default(arch)
+//     }
+// 
+//     #[inline(always)]
+//     fn accumulate(
+//         &self,
+//         x: Self::Left,
+//         y: Self::Right,
+//         acc: Self::Accumulator,
+//     ) -> Self::Accumulator {
+//         algorithms::squared_euclidean_accum_u8x16(x, y, acc)
+//     }
+// 
+//     #[inline(always)]
+//     unsafe fn epilogue(
+//         &self,
+//         arch: Neon,
+//         x: *const u8,
+//         y: *const u8,
+//         len: usize,
+//         acc: Self::Accumulator,
+//     ) -> Self::Accumulator {
+//         let scalar = scalar_epilogue(
+//             x,
+//             y,
+//             len.min(Self::SIMDWidth::value() - 1),
+//             0u32,
+//             |acc, x: u8, y: u8| -> u32 {
+//                 let c = (x as i32) - (y as i32);
+//                 acc + ((c * c) as u32)
+//             },
+//         );
+//         acc + Self::Accumulator::from_array(arch, [scalar, 0, 0, 0, 0, 0, 0, 0])
+//     }
+// 
+//     // Perform a final reduction.
+//     #[inline(always)]
+//     fn reduce(&self, x: Self::Accumulator) -> Self::Return {
+//         x.sum_tree().as_f32_lossy()
+//     }
+// }
+
 #[cfg(target_arch = "aarch64")]
 impl SIMDSchema<u8, u8, Neon> for L2 {
     type SIMDWidth = Const<16>;
-    type Accumulator = <Neon as Architecture>::u32x8;
+    type Accumulator = <Neon as Architecture>::u32x4;
     type Left = diskann_wide::arch::aarch64::u8x16;
     type Right = diskann_wide::arch::aarch64::u8x16;
     type Return = f32;
@@ -1596,7 +1649,29 @@ impl SIMDSchema<u8, u8, Neon> for L2 {
         y: Self::Right,
         acc: Self::Accumulator,
     ) -> Self::Accumulator {
-        algorithms::squared_euclidean_accum_u8x16(x, y, acc)
+        use std::arch::aarch64::*;
+        use std::arch::asm;
+
+        let arch = acc.arch();
+
+        unsafe {
+            let x = x.to_underlying();
+            let y = y.to_underlying();
+            let mut acc = acc.to_underlying();
+
+            // 16 unsigned absolute byte differences.
+            let diff = vabdq_u8(x, y);
+
+            // Each u32 lane accumulates four squared differences.
+            asm!(
+                "udot {acc:v}.4s, {diff:v}.16b, {diff:v}.16b",
+                acc = inout(vreg) acc,
+                diff = in(vreg) diff,
+                options(pure, nomem, nostack),
+            );
+
+            Self::Accumulator::from_underlying(arch, acc)
+        }
     }
 
     #[inline(always)]
@@ -1615,13 +1690,16 @@ impl SIMDSchema<u8, u8, Neon> for L2 {
             0u32,
             |acc, x: u8, y: u8| -> u32 {
                 let c = (x as i32) - (y as i32);
-                acc + ((c * c) as u32)
+                acc + (c * c) as u32
             },
         );
-        acc + Self::Accumulator::from_array(arch, [scalar, 0, 0, 0, 0, 0, 0, 0])
+
+        acc + Self::Accumulator::from_array(
+            arch,
+            [scalar, 0, 0, 0],
+        )
     }
 
-    // Perform a final reduction.
     #[inline(always)]
     fn reduce(&self, x: Self::Accumulator) -> Self::Return {
         x.sum_tree().as_f32_lossy()
