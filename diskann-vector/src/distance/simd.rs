@@ -248,6 +248,10 @@ pub struct Strategy1x1;
 /// accumulator with a manual inner loop unroll of 1.
 pub struct Strategy2x1;
 
+/// An inner loop implementation strategy using 2 parallel instances of the schema
+/// accumulator with a manual inner loop unroll of 2.
+pub struct Strategy2x2;
+
 /// An inner loop implementation strategy using 4 parallel instances of the schema
 /// accumulator with a manual inner loop unroll of 1.
 pub struct Strategy4x1;
@@ -307,6 +311,48 @@ impl MainLoop for Strategy2x1 {
         for i in 0..trip_count {
             s0 = schema.accumulate_tuple(s0, loader.load(i, 0));
             s1 = schema.accumulate_tuple(s1, loader.load(i, 1));
+        }
+
+        let mut s = schema.combine(s0, s1);
+        if epilogues != 0 {
+            s = schema.accumulate_tuple(s, loader.load(trip_count, 0));
+        }
+
+        s
+    }
+}
+
+impl MainLoop for Strategy2x2 {
+    const BLOCK_SIZE: usize = 2;
+
+    #[inline(always)]
+    unsafe fn main<S, L, R, A>(
+        loader: &Loader<S, L, R, A>,
+        trip_count: usize,
+        epilogues: usize,
+    ) -> S::Accumulator
+    where
+        A: Architecture,
+        S: SIMDSchema<L, R, A>,
+    {
+        let arch = loader.arch();
+        let schema = loader.schema();
+
+        let mut s0 = schema.init(arch);
+        let mut s1 = schema.init(arch);
+
+        for i in 0..(trip_count / 2) {
+            let j = 2 * i;
+            s0 = schema.accumulate_tuple(s0, loader.load(j, 0));
+            s1 = schema.accumulate_tuple(s1, loader.load(j, 1));
+            s0 = schema.accumulate_tuple(s0, loader.load(j, 2));
+            s1 = schema.accumulate_tuple(s1, loader.load(j, 3));
+        }
+
+        if !trip_count.is_multiple_of(2) {
+            let j = trip_count - 1;
+            s0 = schema.accumulate_tuple(s0, loader.load(j, 0));
+            s1 = schema.accumulate_tuple(s1, loader.load(j, 1));
         }
 
         let mut s = schema.combine(s0, s1);
@@ -1622,7 +1668,7 @@ impl SIMDSchema<f32, f32, Neon> for IP {
     type Left = <Neon as Architecture>::f32x4;
     type Right = <Neon as Architecture>::f32x4;
     type Return = f32;
-    type Main = Strategy4x1;
+    type Main = Strategy2x2;
 
     #[inline(always)]
     fn init(&self, arch: Neon) -> Self::Accumulator {
