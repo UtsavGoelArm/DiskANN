@@ -6,7 +6,7 @@
 use half::f16;
 
 use crate::{
-    AsSIMD, Emulated, SIMDAbs, SIMDMask, SIMDMinMax, SIMDMulAdd, SIMDPartialEq, SIMDPartialOrd,
+    AsSIMD, Emulated, SIMDAbs, SIMDDotProduct, SIMDMask, SIMDMinMax, SIMDMulAdd, SIMDPartialEq, SIMDPartialOrd,
     SIMDSelect, SIMDSumTree, SIMDVector, constant::Const, helpers,
 };
 
@@ -110,6 +110,37 @@ impl SIMDSelect<f32x4> for mask32x4 {
     }
 }
 
+impl SIMDDotProduct<f16x4> for f32x4 {
+    #[inline(always)]
+    fn dot_simd(self, left: f16x4, right: f16x4) -> Self {
+        if cfg!(miri) {
+            let acc = self.to_array();
+            let left = left.to_array();
+            let right = right.to_array();
+            Self::from_array(self.arch(), std::array::from_fn(|i| {
+                crate::cast_f16_to_f32(left[i]).mul_add(crate::cast_f16_to_f32(right[i]), acc[i])
+            }))
+        } else {
+            #[target_feature(enable = "fhm")]
+            unsafe fn fmlal(mut acc: float32x4_t, left: uint16x4_t, right: uint16x4_t) -> float32x4_t {
+                unsafe {
+                    asm!(
+                        "fmlal {acc:v}.4s, {left:v}.4h, {right:v}.4h",
+                        acc = inout(vreg) acc,
+                        left = in(vreg) left,
+                        right = in(vreg) right,
+                        options(nomem, nostack)
+                    );
+                }
+                acc
+            }
+
+            // SAFETY: The `Neon` architecture guarantees `fhm`.
+            Self(unsafe { fmlal(self.0, left.0, right.0) })
+        }
+    }
+}
+
 //------------//
 // Conversion //
 //------------//
@@ -191,6 +222,16 @@ mod tests {
     fn test_constructors() {
         if let Some(arch) = test_neon() {
             test_utils::ops::test_splat::<f32, 4, f32x4>(arch);
+        }
+    }
+
+    #[test]
+    fn test_f16_dot_product() {
+        if let Some(arch) = test_neon() {
+            let left = f16x4::from_array(arch, [1.0, 2.0, -3.0, 4.0].map(f16::from_f32));
+            let right = f16x4::from_array(arch, [2.0, -1.0, 0.5, 0.25].map(f16::from_f32));
+            let acc = f32x4::from_array(arch, [0.5, 1.0, 2.0, -3.0]);
+            assert_eq!(acc.dot_simd(left, right).to_array(), [2.5, -1.0, 0.5, -2.0]);
         }
     }
 
