@@ -28,6 +28,28 @@ use std::arch::aarch64::*;
 
 macros::aarch64_define_register!(f16x4, uint16x4_t, mask16x4, f16, 4, Neon);
 
+impl std::ops::Sub for f16x4 {
+    type Output = Self;
+
+    #[inline(always)]
+    fn sub(self, rhs: Self) -> Self {
+        if cfg!(miri) {
+            let x = self.to_array();
+            let y = rhs.to_array();
+            Self::from_array(self.arch(), std::array::from_fn(|i| {
+                crate::cast_f32_to_f16(crate::cast_f16_to_f32(x[i]) - crate::cast_f16_to_f32(y[i]))
+            }))
+        } else {
+            // SAFETY: The `Neon` architecture requires FHM, which enables FP16.
+            Self(unsafe {
+                let x = vreinterpret_f16_u16(self.0);
+                let y = vreinterpret_f16_u16(rhs.0);
+                vreinterpret_u16_f16(vsub_f16(x, y))
+            })
+        }
+    }
+}
+
 impl AArchSplat for f16x4 {
     #[inline(always)]
     fn aarch_splat(_: Neon, value: f16) -> Self {
@@ -106,6 +128,16 @@ mod tests {
     fn miri_test_store() {
         if let Some(arch) = test_neon() {
             test_utils::test_store_simd::<f16, 4, f16x4>(arch);
+        }
+    }
+
+    #[test]
+    fn test_sub() {
+        if let Some(arch) = test_neon() {
+            let x = f16x4::from_array(arch, [1.0, 2.0, 3.5, -4.0].map(f16::from_f32));
+            let y = f16x4::from_array(arch, [0.5, -1.0, 1.0, 2.0].map(f16::from_f32));
+            let expected = [0.5, 3.0, 2.5, -6.0].map(f16::from_f32);
+            assert_eq!((x - y).to_array(), expected);
         }
     }
 
