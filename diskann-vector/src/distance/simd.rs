@@ -1086,13 +1086,8 @@ impl SIMDSchema<Half, Half, Neon> for L2 {
         y: Self::Right,
         acc: Self::Accumulator,
     ) -> Self::Accumulator {
-        diskann_wide::alias!(f32s = <Neon>::f32x4);
-
-        let x: f32s = x.into();
-        let y: f32s = y.into();
-
         let c = x - y;
-        c.mul_add_simd(c, acc)
+        acc.dot_simd(c, c)
     }
 
     #[inline(always)]
